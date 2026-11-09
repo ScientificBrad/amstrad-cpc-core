@@ -22,6 +22,12 @@ static class Program
         {
             machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
             machine.Memory.LoadUpperRom(0, File.ReadAllBytes(basicPath));
+
+            string amsdosPath = FindRomPath("AMSDOS.ROM");
+            if (File.Exists(amsdosPath))
+            {
+                machine.Memory.LoadUpperRom(7, File.ReadAllBytes(amsdosPath));
+            }
         }
         else
         {

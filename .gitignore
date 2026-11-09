@@ -22,6 +22,10 @@ __pycache__/
 # Temporary graphics / dumps
 *.tmp
 *.raw
+*.bmp
+
+# Games / media
+games/
 
 # Proprietary ROMs and copyrighted media (Clean-Room Distribution)
 *.rom

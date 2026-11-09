@@ -3,13 +3,14 @@ using AmstradCPC.Core.Cpu;
 using AmstradCPC.Core.Input;
 using AmstradCPC.Core.Io;
 using AmstradCPC.Core.Memory;
+using AmstradCPC.Core.Storage;
 using AmstradCPC.Core.Video;
 
 namespace AmstradCPC.Core.Machine;
 
 /// <summary>
 /// Master Amstrad CPC Machine hardware coordinator.
-/// Orchestrates CPU, Gate Array, CRTC, PPI, PSG, Memory, and Video Renderer.
+/// Orchestrates CPU, Gate Array, CRTC, PPI, PSG, FDC, Memory, and Video Renderer.
 /// </summary>
 public sealed class AmstradMachine
 {
@@ -20,6 +21,8 @@ public sealed class AmstradMachine
     public Crtc6845 Crtc { get; }
     public Ppi8255 Ppi { get; }
     public Ay38912 Psg { get; }
+    public Upd765Fdc Fdc { get; }
+    public CdtTape? Tape { get; set; }
     public KeyboardMatrix Keyboard { get; }
     public IoBus Io { get; }
     public ScreenRenderer Renderer { get; }
@@ -28,9 +31,11 @@ public sealed class AmstradMachine
     public const int CyclesPerFrame = 80000; // ~50 Hz PAL: 312 lines * 64 chars * 4 cycles = 79,872 cycles
     public long TotalFrames { get; private set; }
 
-    // Audio sample ring buffer
-    public float[] AudioBuffer { get; } = new float[2048];
+    // Audio sample buffer: exactly 882 samples per 50 Hz frame at 44.1 kHz
+    public float[] AudioBuffer { get; } = new float[1024];
     public int AudioBufferCount { get; private set; }
+    private long _audioCyclesAccumulator = 0;
+    private float _lastPsgSample = 0f;
 
     public AmstradMachine(CpcModel model = CpcModel.CPC464)
     {
@@ -41,7 +46,8 @@ public sealed class AmstradMachine
         Keyboard = new KeyboardMatrix();
         Psg = new Ay38912(Keyboard);
         Ppi = new Ppi8255(Psg, Crtc);
-        Io = new IoBus(GateArray, Crtc, Memory, Ppi);
+        Fdc = new Upd765Fdc();
+        Io = new IoBus(GateArray, Crtc, Memory, Ppi, Fdc);
         Renderer = new ScreenRenderer(Memory, GateArray, Crtc);
         Trace = new Z80Trace();
 
@@ -71,6 +77,7 @@ public sealed class AmstradMachine
         Keyboard.Reset();
         Psg.Reset();
         Ppi.Reset();
+        Fdc.Reset();
         Cpu.Reset();
         TotalFrames = 0;
         AudioBufferCount = 0;
@@ -98,16 +105,28 @@ public sealed class AmstradMachine
             frameCycles += stepCycles;
             crtcSubCycleCounter += stepCycles;
 
+            // Step Cassette tape player if mounted and motor is on
+            if (Tape != null && Tape.IsLoaded)
+            {
+                Ppi.CassetteDataIn = Tape.Step(stepCycles, Ppi.CassetteMotor);
+            }
+
             // Step CRTC and PSG every 4 CPU cycles (1.0 MHz character/audio clock)
             while (crtcSubCycleCounter >= 4)
             {
                 crtcSubCycleCounter -= 4;
                 Crtc.StepCharacterClock();
+                _lastPsgSample = Psg.Clock();
+            }
 
-                float sample = Psg.Clock();
+            // Sample audio down to exactly 44,100 Hz (882 samples per 80,000 CPU cycles at 50 Hz)
+            _audioCyclesAccumulator += (long)stepCycles * 44100;
+            while (_audioCyclesAccumulator >= 4000000)
+            {
+                _audioCyclesAccumulator -= 4000000;
                 if (AudioBufferCount < AudioBuffer.Length)
                 {
-                    AudioBuffer[AudioBufferCount++] = sample;
+                    AudioBuffer[AudioBufferCount++] = _lastPsgSample;
                 }
             }
         }

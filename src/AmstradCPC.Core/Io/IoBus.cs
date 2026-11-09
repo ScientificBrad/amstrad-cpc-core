@@ -1,4 +1,5 @@
 using AmstradCPC.Core.Memory;
+using AmstradCPC.Core.Storage;
 using AmstradCPC.Core.Video;
 
 namespace AmstradCPC.Core.Io;
@@ -13,13 +14,15 @@ public sealed class IoBus
     private readonly Crtc6845 _crtc;
     private readonly MemorySubsystem _memory;
     private readonly Ppi8255 _ppi;
+    private readonly Upd765Fdc _fdc;
 
-    public IoBus(GateArray gateArray, Crtc6845 crtc, MemorySubsystem memory, Ppi8255 ppi)
+    public IoBus(GateArray gateArray, Crtc6845 crtc, MemorySubsystem memory, Ppi8255 ppi, Upd765Fdc fdc)
     {
         _gateArray = gateArray;
         _crtc = crtc;
         _memory = memory;
         _ppi = ppi;
+        _fdc = fdc;
     }
 
     public byte ReadPort(ushort port)
@@ -47,14 +50,14 @@ public sealed class IoBus
             return _crtc.ReadData(); // &BFxx
         }
 
-        // Floppy Disk Controller (µPD765): A10 = 0 and A7 = 0
+        // Floppy Disk Controller (µPD765): A10 = 0 and A7 = 0 (&FB7E / &FB7F)
         if ((port & 0x0400) == 0 && (port & 0x0080) == 0)
         {
             if ((port & 0x0001) == 0)
             {
-                return 0x80; // FDC Main Status Register: RQM = 1 (Ready for data transfer)
+                return _fdc.ReadMainStatus(); // &FB7E: Main Status Register
             }
-            return 0x00; // FDC Data Register
+            return _fdc.ReadData(); // &FB7F: Data FIFO
         }
 
         return 0xFF; // Floating bus
@@ -66,6 +69,10 @@ public sealed class IoBus
         if ((port & 0xC000) == 0x4000)
         {
             _gateArray.WriteRegister(value);
+            if ((value & 0xC0) == 0xC0)
+            {
+                _memory.SetRamBankConfig(value);
+            }
         }
 
         // CRTC 6845: A14 = 0
@@ -97,6 +104,19 @@ public sealed class IoBus
                 case 1: break; // Port B is read-only on CPC
                 case 2: _ppi.WritePortC(value); break;
                 case 3: _ppi.WriteControl(value); break;
+            }
+        }
+
+        // Floppy Drive Motor (&FA7E) and FDC Data (&FB7F): A10 = 0 and A7 = 0
+        if ((port & 0x0400) == 0 && (port & 0x0080) == 0)
+        {
+            if ((port & 0x0100) == 0 && (port & 0x0001) == 0)
+            {
+                _fdc.MotorOn = (value & 0x01) != 0; // &FA7E
+            }
+            else if ((port & 0x0001) != 0)
+            {
+                _fdc.WriteData(value); // &FB7F
             }
         }
     }

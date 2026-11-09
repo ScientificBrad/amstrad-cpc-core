@@ -11,14 +11,25 @@ using AmstradCPC.Core.Cpu;
 using AmstradCPC.Core.Input;
 using AmstradCPC.Core.Machine;
 using AmstradCPC.Core.Memory;
+using AmstradCPC.Core.Storage;
 using AmstradCPC.Core.Video;
 
 namespace AmstradCPC.Emulator;
 
 public sealed class AmstradWindow : Form
 {
-    private readonly AmstradMachine _machine;
+    [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod", SetLastError = true)]
+    private static extern uint TimeBeginPeriod(uint uMilliseconds);
+
+    [DllImport("winmm.dll", EntryPoint = "timeEndPeriod", SetLastError = true)]
+    private static extern uint TimeEndPeriod(uint uMilliseconds);
+
+    private AmstradMachine _machine;
     private readonly WindowsWaveOut _audio;
+
+    private ToolStripMenuItem? _cpc464Item;
+    private ToolStripMenuItem? _cpc664Item;
+    private ToolStripMenuItem? _cpc6128Item;
 
     private readonly int[] _framebufferCopy = new int[ScreenRenderer.ScreenWidth * ScreenRenderer.ScreenHeight];
     private readonly object _frameLock = new();
@@ -27,8 +38,9 @@ public sealed class AmstradWindow : Form
     private Thread? _emuThread;
     private volatile bool _running = true;
     private volatile bool _paused = false;
+    private volatile bool _paintPending = false;
 
-    private int _scale = 2;
+    private int _scale = 2; // Default 2x vertical (768 x 544), ideal 4:3 CPC aspect ratio
     private bool _greenMonitor = false;
     private bool _showFps = true;
     private double _fps = 50.0;
@@ -36,6 +48,8 @@ public sealed class AmstradWindow : Form
     private readonly Stopwatch _fpsStopwatch = Stopwatch.StartNew();
 
     private readonly MenuStrip _menuStrip;
+    private readonly SolidBrush _fpsBgBrush = new(Color.FromArgb(180, Color.Black));
+    private readonly Font _fpsFont = new("Consolas", 10, FontStyle.Bold);
 
     public AmstradWindow(AmstradMachine machine)
     {
@@ -50,12 +64,13 @@ public sealed class AmstradWindow : Form
         BackColor = Color.Black;
         KeyPreview = true;
 
-        ClientSize = new Size(ScreenRenderer.ScreenWidth, ScreenRenderer.ScreenHeight * _scale);
-        _displayBitmap = new Bitmap(ScreenRenderer.ScreenWidth, ScreenRenderer.ScreenHeight, PixelFormat.Format32bppRgb);
-
         _menuStrip = CreateMenuStrip();
         MainMenuStrip = _menuStrip;
         Controls.Add(_menuStrip);
+
+        // Aspect ratio: CPC standard 768 width x (272 * 2 = 544) height gives authentic 4:3 ratio
+        ClientSize = new Size(ScreenRenderer.ScreenWidth, (ScreenHeightEffective() * _scale / 2) + _menuStrip.Height);
+        _displayBitmap = new Bitmap(ScreenRenderer.ScreenWidth, ScreenRenderer.ScreenHeight, PixelFormat.Format32bppRgb);
 
         // Window Events
         Load += OnWindowLoad;
@@ -64,6 +79,51 @@ public sealed class AmstradWindow : Form
         KeyUp += OnWindowKeyUp;
         Deactivate += (s, e) => _machine.Keyboard.Reset(); // Clear stuck keys on focus loss
         Paint += OnWindowPaint;
+
+        // Drag & Drop media support
+        AllowDrop = true;
+        DragEnter += (s, e) => {
+            if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
+                e.Effect = DragDropEffects.Copy;
+        };
+        DragDrop += (s, e) => {
+            if (e.Data?.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0)
+            {
+                string file = files[0];
+                string ext = Path.GetExtension(file).ToLowerInvariant();
+                if (ext == ".dsk")
+                {
+                    var dsk = DskImage.Load(file);
+                    if (dsk != null)
+                    {
+                        _machine.Fdc.DriveA = dsk;
+                        MessageBox.Show($"Mounted floppy disk: {Path.GetFileName(file)}", "Disk Mounted");
+                    }
+                }
+                else if (ext == ".cdt" || ext == ".tzx")
+                {
+                    var tape = CdtTape.Load(file);
+                    if (tape != null)
+                    {
+                        _machine.Tape = tape;
+                        MessageBox.Show($"Mounted tape: {Path.GetFileName(file)}", "Tape Mounted");
+                    }
+                }
+            }
+        };
+    }
+
+    private static int ScreenHeightEffective() => ScreenRenderer.ScreenHeight * 2; // 544 lines
+
+    protected override bool ProcessDialogKey(Keys keyData)
+    {
+        // Prevent Windows Forms from intercepting Arrow keys and Tab as dialog focus keys
+        Keys key = keyData & Keys.KeyCode;
+        if (key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || key == Keys.Tab)
+        {
+            return false;
+        }
+        return base.ProcessDialogKey(keyData);
     }
 
     private MenuStrip CreateMenuStrip()
@@ -72,16 +132,16 @@ public sealed class AmstradWindow : Form
 
         // Machine Menu
         var machineMenu = new ToolStripMenuItem("&Machine");
-        var cpc464Item = new ToolStripMenuItem("CPC 464 (1984)", null, (s, e) => SwitchModel(CpcModel.CPC464)) { Checked = true };
-        var cpc664Item = new ToolStripMenuItem("CPC 664 (1985) [Phase 8]", null, (s, e) => SwitchModel(CpcModel.CPC664));
-        var cpc6128Item = new ToolStripMenuItem("CPC 6128 (1985) [Phase 8]", null, (s, e) => SwitchModel(CpcModel.CPC6128));
+        _cpc464Item = new ToolStripMenuItem("CPC 464 (1984)", null, (s, e) => SwitchModel(CpcModel.CPC464)) { Checked = (_machine.Model == CpcModel.CPC464) };
+        _cpc664Item = new ToolStripMenuItem("CPC 664 (1985)", null, (s, e) => SwitchModel(CpcModel.CPC664)) { Checked = (_machine.Model == CpcModel.CPC664) };
+        _cpc6128Item = new ToolStripMenuItem("CPC 6128 (1985)", null, (s, e) => SwitchModel(CpcModel.CPC6128)) { Checked = (_machine.Model == CpcModel.CPC6128) };
         var cpcPlusItem = new ToolStripMenuItem("CPC 464 / 6128 Plus [Phase 11 Milestone]") { Enabled = false };
         var gx4000Item = new ToolStripMenuItem("GX4000 Console [Phase 11 Milestone]") { Enabled = false };
         var resetItem = new ToolStripMenuItem("&Reset", null, (s, e) => _machine.Reset(), Keys.Control | Keys.R);
         var pauseItem = new ToolStripMenuItem("&Pause / Resume", null, (s, e) => _paused = !_paused, Keys.Pause);
 
         machineMenu.DropDownItems.AddRange(new ToolStripItem[] {
-            cpc464Item, cpc664Item, cpc6128Item,
+            _cpc464Item, _cpc664Item, _cpc6128Item,
             new ToolStripSeparator(),
             cpcPlusItem, gx4000Item,
             new ToolStripSeparator(),
@@ -91,16 +151,26 @@ public sealed class AmstradWindow : Form
         // Media Menu
         var mediaMenu = new ToolStripMenuItem("&Media");
         var insertTapeItem = new ToolStripMenuItem("Insert Cassette (.CDT / .TZX)...", null, OnInsertTape);
-        var insertDiskItem = new ToolStripMenuItem("Insert Disk (.DSK)...", null, OnInsertDisk);
-        var ejectMediaItem = new ToolStripMenuItem("Eject All Media", null, (s, e) => MessageBox.Show("Media ejected.", "Media"));
-        mediaMenu.DropDownItems.AddRange(new ToolStripItem[] { insertTapeItem, insertDiskItem, new ToolStripSeparator(), ejectMediaItem });
+        var insertDiskItem = new ToolStripMenuItem("Insert Disk A (.DSK)...", null, OnInsertDisk);
+        var fastLoadItem = new ToolStripMenuItem("Fast Tape / Disk Loading", null, (s, e) => {
+            var item = (ToolStripMenuItem)s!;
+            item.Checked = !item.Checked;
+            if (_machine.Tape != null) _machine.Tape.FastLoadEnabled = item.Checked;
+        }) { Checked = true };
+        var ejectMediaItem = new ToolStripMenuItem("Eject All Media", null, (s, e) => {
+            _machine.Tape = null;
+            _machine.Fdc.DriveA = null;
+            _machine.Fdc.DriveB = null;
+            MessageBox.Show("All media ejected.", "Media Ejected");
+        });
+        mediaMenu.DropDownItems.AddRange(new ToolStripItem[] { insertTapeItem, insertDiskItem, fastLoadItem, new ToolStripSeparator(), ejectMediaItem });
 
         // Display Menu
         var displayMenu = new ToolStripMenuItem("&Display");
         var colorMonItem = new ToolStripMenuItem("Colour Monitor (CTM644)", null, (s, e) => _greenMonitor = false) { Checked = true };
         var greenMonItem = new ToolStripMenuItem("Green Monitor (GT65)", null, (s, e) => _greenMonitor = true);
-        var scale1x = new ToolStripMenuItem("1x Normal Scale", null, (s, e) => SetScale(1));
-        var scale2x = new ToolStripMenuItem("2x Crisp Scale", null, (s, e) => SetScale(2)) { Checked = true };
+        var scale1x = new ToolStripMenuItem("Standard 4:3 Window (768 x 544)", null, (s, e) => SetScale(2)) { Checked = true };
+        var scale2x = new ToolStripMenuItem("Double Size Window (1536 x 1088)", null, (s, e) => SetScale(4));
         var showFpsItem = new ToolStripMenuItem("Show Frame Rate", null, (s, e) => _showFps = !_showFps) { Checked = true };
 
         displayMenu.DropDownItems.AddRange(new ToolStripItem[] {
@@ -129,14 +199,84 @@ public sealed class AmstradWindow : Form
     private void SetScale(int scale)
     {
         _scale = scale;
-        ClientSize = new Size(ScreenRenderer.ScreenWidth, ScreenRenderer.ScreenHeight * _scale + _menuStrip.Height);
+        int targetW = ScreenRenderer.ScreenWidth * (_scale / 2);
+        int targetH = (ScreenHeightEffective() * _scale / 4) + _menuStrip.Height;
+        ClientSize = new Size(targetW, targetH);
         Invalidate();
     }
 
     private void SwitchModel(CpcModel model)
     {
-        MessageBox.Show($"Selected Model: {model}. Machine reset.", "Hardware Switch");
-        _machine.Reset();
+        lock (_frameLock)
+        {
+            var oldDriveA = _machine.Fdc.DriveA;
+            var oldDriveB = _machine.Fdc.DriveB;
+            var oldTape = _machine.Tape;
+
+            _machine = new AmstradMachine(model);
+            LoadRomsForModel(model);
+
+            _machine.Fdc.DriveA = oldDriveA;
+            _machine.Fdc.DriveB = oldDriveB;
+            _machine.Tape = oldTape;
+
+            Text = model switch
+            {
+                CpcModel.CPC6128 => "Amstrad CPC 6128 (1985) — Complete Family Reconstruction",
+                CpcModel.CPC664 => "Amstrad CPC 664 (1985) — Complete Family Reconstruction",
+                _ => "Amstrad CPC 464 (1984) — Complete Family Reconstruction"
+            };
+
+            if (_cpc464Item != null) _cpc464Item.Checked = (model == CpcModel.CPC464);
+            if (_cpc664Item != null) _cpc664Item.Checked = (model == CpcModel.CPC664);
+            if (_cpc6128Item != null) _cpc6128Item.Checked = (model == CpcModel.CPC6128);
+
+            _machine.Reset();
+        }
+    }
+
+    private void LoadRomsForModel(CpcModel model)
+    {
+        string amsdosPath = FindRomPath("AMSDOS.ROM");
+        switch (model)
+        {
+            case CpcModel.CPC6128:
+            case CpcModel.CPC664:
+                {
+                    string osPath = FindRomPath("OS6128.ROM");
+                    string basicPath = FindRomPath("BASIC1-1.ROM");
+                    if (File.Exists(osPath)) _machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
+                    if (File.Exists(basicPath)) _machine.Memory.LoadUpperRom(0, File.ReadAllBytes(basicPath));
+                    if (File.Exists(amsdosPath)) _machine.Memory.LoadUpperRom(7, File.ReadAllBytes(amsdosPath));
+                    break;
+                }
+            default: // CPC464
+                {
+                    string osPath = FindRomPath("OS464.ROM");
+                    string basicPath = FindRomPath("BASIC1-0.ROM");
+                    if (File.Exists(osPath)) _machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
+                    if (File.Exists(basicPath)) _machine.Memory.LoadUpperRom(0, File.ReadAllBytes(basicPath));
+                    if (File.Exists(amsdosPath)) _machine.Memory.LoadUpperRom(7, File.ReadAllBytes(amsdosPath));
+                    break;
+                }
+        }
+    }
+
+    private static string FindRomPath(string filename)
+    {
+        string[] candidates = new[]
+        {
+            Path.Combine("roms", filename),
+            Path.Combine("..", "..", "..", "..", "..", "roms", filename),
+            Path.Combine(AppContext.BaseDirectory, "roms", filename),
+            Path.Combine(@"D:\Emulation\Amstrad\roms", filename)
+        };
+
+        foreach (var path in candidates)
+        {
+            if (File.Exists(path)) return path;
+        }
+        return Path.Combine(@"D:\Emulation\Amstrad\roms", filename);
     }
 
     private void OnInsertTape(object? sender, EventArgs e)
@@ -144,7 +284,16 @@ public sealed class AmstradWindow : Form
         using var ofd = new OpenFileDialog { Filter = "CPC Tapes (*.cdt;*.tzx)|*.cdt;*.tzx|All Files (*.*)|*.*" };
         if (ofd.ShowDialog() == DialogResult.OK)
         {
-            MessageBox.Show($"Loaded tape: {Path.GetFileName(ofd.FileName)}", "Tape Mounted");
+            var tape = CdtTape.Load(ofd.FileName);
+            if (tape != null)
+            {
+                _machine.Tape = tape;
+                MessageBox.Show($"Loaded tape: {Path.GetFileName(ofd.FileName)}\nTotal pulses: {tape.TotalPulses:N0}\nReady to load with RUN\"\"", "Tape Mounted");
+            }
+            else
+            {
+                MessageBox.Show("Failed to parse CDT tape file.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 
@@ -153,7 +302,16 @@ public sealed class AmstradWindow : Form
         using var ofd = new OpenFileDialog { Filter = "CPC Disks (*.dsk)|*.dsk|All Files (*.*)|*.*" };
         if (ofd.ShowDialog() == DialogResult.OK)
         {
-            MessageBox.Show($"Loaded floppy disk: {Path.GetFileName(ofd.FileName)}", "Disk Mounted");
+            var dsk = DskImage.Load(ofd.FileName);
+            if (dsk != null)
+            {
+                _machine.Fdc.DriveA = dsk;
+                MessageBox.Show($"Loaded floppy disk: {Path.GetFileName(ofd.FileName)}\nFormat: {(dsk.IsExtended ? "Extended" : "Standard")} DSK\nTracks: {dsk.TrackCount}, Sides: {dsk.SideCount}\nReady to use with CAT or RUN\"FILENAME\"", "Disk Mounted");
+            }
+            else
+            {
+                MessageBox.Show("Failed to parse DSK floppy disk image.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
     }
 
@@ -171,6 +329,8 @@ public sealed class AmstradWindow : Form
 
     private void OnWindowLoad(object? sender, EventArgs e)
     {
+        TimeBeginPeriod(1);
+
         _emuThread = new Thread(EmulationWorker)
         {
             Name = "AmstradCPC_EmuThread",
@@ -185,48 +345,60 @@ public sealed class AmstradWindow : Form
         _running = false;
         _emuThread?.Join(500);
         _audio.Dispose();
+        TimeEndPeriod(1);
     }
 
     private void EmulationWorker()
     {
         var stopwatch = Stopwatch.StartNew();
-        long frameDurationTicks = Stopwatch.Frequency / 50; // 50 Hz PAL frame duration (20ms)
+        long frameDurationTicks = Stopwatch.Frequency / 50; // Exact 50 Hz PAL frame duration (20.0 ms)
+        long nextTargetTicks = stopwatch.ElapsedTicks + frameDurationTicks;
 
         while (_running)
         {
-            long start = stopwatch.ElapsedTicks;
-
             if (!_paused)
             {
                 _machine.StepFrame();
 
-                // Send audio to WinMM output
+                // Send downsampled 44.1 kHz audio to WinMM
                 if (_machine.AudioBufferCount > 0)
                 {
                     _audio.WriteSamples(_machine.AudioBuffer, _machine.AudioBufferCount);
                     _machine.ClearAudioBuffer();
                 }
 
-                // Copy framebuffer
-                lock (_frameLock)
+                // Copy framebuffer when UI is ready for paint
+                if (!_paintPending)
                 {
-                    uint[] src = _machine.Renderer.Framebuffer;
-                    if (_greenMonitor)
+                    _paintPending = true;
+                    lock (_frameLock)
                     {
-                        for (int i = 0; i < src.Length; i++)
+                        uint[] src = _machine.Renderer.Framebuffer;
+                        if (_greenMonitor)
                         {
-                            uint c = src[i];
-                            int r = (int)((c >> 16) & 0xFF);
-                            int g = (int)((c >> 8) & 0xFF);
-                            int b = (int)(c & 0xFF);
-                            int lum = (r * 30 + g * 59 + b * 11) / 100;
-                            // Phosphor green (GT65 monitor)
-                            _framebufferCopy[i] = unchecked((int)(0xFF000000 | ((uint)(lum * 0.4f) << 16) | ((uint)lum << 8) | (uint)(lum * 0.1f)));
+                            for (int i = 0; i < src.Length; i++)
+                            {
+                                uint c = src[i];
+                                int r = (int)((c >> 16) & 0xFF);
+                                int g = (int)((c >> 8) & 0xFF);
+                                int b = (int)(c & 0xFF);
+                                int lum = (r * 30 + g * 59 + b * 11) / 100;
+                                _framebufferCopy[i] = unchecked((int)(0xFF000000 | ((uint)(lum * 0.4f) << 16) | ((uint)lum << 8) | (uint)(lum * 0.1f)));
+                            }
+                        }
+                        else
+                        {
+                            Buffer.BlockCopy(src, 0, _framebufferCopy, 0, src.Length * sizeof(int));
                         }
                     }
-                    else
+
+                    try
                     {
-                        Buffer.BlockCopy(src, 0, _framebufferCopy, 0, src.Length * sizeof(int));
+                        BeginInvoke((MethodInvoker)Invalidate);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        break;
                     }
                 }
 
@@ -237,23 +409,28 @@ public sealed class AmstradWindow : Form
                     _frameCount = 0;
                     _fpsStopwatch.Restart();
                 }
+            }
 
-                try
+            // High precision timing loop for consistent 50.0 FPS
+            long currentTicks = stopwatch.ElapsedTicks;
+            long remainingTicks = nextTargetTicks - currentTicks;
+            if (remainingTicks > 0)
+            {
+                int remainingMs = (int)(remainingTicks * 1000 / Stopwatch.Frequency);
+                if (remainingMs > 2)
                 {
-                    BeginInvoke((MethodInvoker)Invalidate);
+                    Thread.Sleep(remainingMs - 1);
                 }
-                catch (ObjectDisposedException)
+                while (stopwatch.ElapsedTicks < nextTargetTicks)
                 {
-                    break;
+                    Thread.Yield();
                 }
             }
 
-            long elapsed = stopwatch.ElapsedTicks - start;
-            long sleepTicks = frameDurationTicks - elapsed;
-            if (sleepTicks > 0)
+            nextTargetTicks += frameDurationTicks;
+            if (stopwatch.ElapsedTicks > nextTargetTicks + frameDurationTicks)
             {
-                int sleepMs = (int)(sleepTicks * 1000 / Stopwatch.Frequency);
-                if (sleepMs > 0) Thread.Sleep(sleepMs);
+                nextTargetTicks = stopwatch.ElapsedTicks + frameDurationTicks;
             }
         }
     }
@@ -271,6 +448,8 @@ public sealed class AmstradWindow : Form
             _displayBitmap.UnlockBits(data);
         }
 
+        _paintPending = false;
+
         e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
         e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
 
@@ -281,10 +460,8 @@ public sealed class AmstradWindow : Form
         if (_showFps)
         {
             string status = $"50 Hz | FPS: {_fps:F1} | Cycles: {_machine.Cpu.TotalCycles:N0}";
-            using var brush = new SolidBrush(Color.FromArgb(180, Color.Black));
-            using var font = new Font("Consolas", 10, FontStyle.Bold);
-            e.Graphics.FillRectangle(brush, 4, menuHeight + 4, 300, 22);
-            e.Graphics.DrawString(status, font, Brushes.Yellow, 8, menuHeight + 6);
+            e.Graphics.FillRectangle(_fpsBgBrush, 4, menuHeight + 4, 300, 22);
+            e.Graphics.DrawString(status, _fpsFont, Brushes.Yellow, 8, menuHeight + 6);
         }
     }
 
@@ -307,10 +484,23 @@ public sealed class AmstradWindow : Form
         var kb = _machine.Keyboard;
         switch (key)
         {
-            // Row 0: Numpad and cursors
-            case Keys.Down: kb.SetKeyState(0, 2, pressed); break;
-            case Keys.Right: kb.SetKeyState(0, 1, pressed); break;
-            case Keys.Up: kb.SetKeyState(0, 0, pressed); break;
+            // Row 0: Numpad and cursors (and Joy0 emulation)
+            case Keys.Down:
+                kb.SetKeyState(0, 2, pressed);
+                kb.SetKeyState(9, 1, pressed); // Joy0 Down
+                break;
+            case Keys.Right:
+                kb.SetKeyState(0, 1, pressed);
+                kb.SetKeyState(9, 3, pressed); // Joy0 Right
+                break;
+            case Keys.Up:
+                kb.SetKeyState(0, 0, pressed);
+                kb.SetKeyState(9, 0, pressed); // Joy0 Up
+                break;
+            case Keys.Left:
+                kb.SetKeyState(1, 0, pressed);
+                kb.SetKeyState(9, 2, pressed); // Joy0 Left
+                break;
             case Keys.NumPad3:
             case Keys.F3: kb.SetKeyState(0, 5, pressed); break;
             case Keys.NumPad6:
@@ -318,18 +508,18 @@ public sealed class AmstradWindow : Form
             case Keys.NumPad9:
             case Keys.F9: kb.SetKeyState(0, 3, pressed); break;
 
-            // Row 1: Function keys & Left cursor
+            // Row 1: Function keys
             case Keys.NumPad0: kb.SetKeyState(1, 7, pressed); break;
             case Keys.NumPad2: kb.SetKeyState(1, 6, pressed); break;
             case Keys.NumPad1: kb.SetKeyState(1, 5, pressed); break;
             case Keys.NumPad5: kb.SetKeyState(1, 4, pressed); break;
             case Keys.NumPad8: kb.SetKeyState(1, 3, pressed); break;
             case Keys.NumPad7: kb.SetKeyState(1, 2, pressed); break;
-            case Keys.Left: kb.SetKeyState(1, 0, pressed); break;
 
             // Row 2: Control, Return, Shift, F4
             case Keys.ControlKey: kb.SetKeyState(2, 7, pressed); break;
             case Keys.ShiftKey: kb.SetKeyState(2, 5, pressed); break;
+            case Keys.NumPad4:
             case Keys.F4: kb.SetKeyState(2, 4, pressed); break;
             case Keys.Return: kb.SetKeyState(2, 2, pressed); break;
 
@@ -350,8 +540,15 @@ public sealed class AmstradWindow : Form
             case Keys.D9: kb.SetKeyState(4, 1, pressed); break;
             case Keys.D0: kb.SetKeyState(4, 0, pressed); break;
 
-            // Row 5: Space, N, J, H, Y, U, 7, 8
-            case Keys.Space: kb.SetKeyState(5, 7, pressed); break;
+            // Row 5: Space, N, J, H, Y, U, 7, 8 (Space also triggers Joy0 Fire 1)
+            case Keys.Space:
+                kb.SetKeyState(5, 7, pressed);
+                kb.SetKeyState(9, 4, pressed); // Joy0 Fire 1
+                break;
+            case Keys.Alt:
+            case Keys.Menu:
+                kb.SetKeyState(9, 5, pressed); // Joy0 Fire 2
+                break;
             case Keys.N: kb.SetKeyState(5, 6, pressed); break;
             case Keys.J: kb.SetKeyState(5, 5, pressed); break;
             case Keys.H: kb.SetKeyState(5, 4, pressed); break;

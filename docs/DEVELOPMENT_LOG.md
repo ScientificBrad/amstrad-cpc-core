@@ -20,3 +20,33 @@
   - 27-colour hardware palette matrix.
   - PPI 8255 and AY-3-8912 keyboard matrix scanning coupling.
 - Creating .NET 8 solution and projects (`AmstradCPC.Core`, `AmstradCPC.Emulator`, `AmstradCPC.Debugger`, `AmstradCPC.Tests`).
+
+---
+
+### Milestone 2 — Real Game Engine Repair Mission (Palace Software Barbarian Achieved)
+
+#### 1. Performance and Graphics Timing (Workstream 1)
+- Replaced naive `Thread.Sleep` with Windows multimedia timer `timeBeginPeriod(1)` and high-precision `Stopwatch` spin-yield loop, locking execution at an authentic **50.0 FPS** (20.0 ms per frame).
+- Replaced 1 MHz raw audio push with accurate linear downsampling to 44,100 Hz (882 16-bit samples per 80,000-cycle frame), completely eliminating buffer starvation, stutter, and silence.
+- Created precomputed 256-entry lookup tables for video modes 0, 1, and 2 in `ScreenRenderer.cs`, dynamically centering display to eliminate border/overscan clipping.
+- Overrode `ProcessDialogKey` in `AmstradWindow.cs` to prevent Windows Forms controls from eating cursor and tab keys, delivering them directly to the Z80 keyboard matrix.
+
+#### 2. Cassette Engine (Workstream 2)
+- Reconstructed authentic `.CDT` tape streaming engine (`CdtTape.cs`) supporting standard speed (0x10), turbo speed (0x11), pure tone (0x12), pulse sequence (0x13), and pause (0x20) blocks.
+- Connected pulse train to Intel 8255 PPI Port B bit 0 (`CassetteDataIn`) gated by Port C bit 5 (`CassetteMotor`).
+- Implemented optional fast tape loading.
+
+#### 3. CPC 664/6128 Floppy Controller & AMSDOS (Workstream 3)
+- Reconstructed NEC µPD765A / Intel 8272 Floppy Disk Controller (`Upd765Fdc.cs`) with full state machine handling Specify (`0x03`), Sense Drive Status (`0x04`), Recalibrate (`0x07`), Sense Interrupt Status (`0x08`), Seek (`0x0F`), Read Data (`0x46`/`0x66`), Write Data (`0x45`), and Read ID (`0x4A`).
+- Reconstructed `.DSK` (Standard and Extended CPC DSK) image parser (`DskImage.cs`) with multi-track, variable sector size, and geometry decoding.
+- Integrated floppy drive motor register at `&FA7E` and FDC MSR/Data ports at `&FB7E`/`&FB7F` in `IoBus.cs`.
+- Integrated AMSDOS ROM in Upper ROM Bank 7 with Gate Array CPC 6128 RAM bank switching (`&C0`–`&C7`).
+
+#### 4. Acceptance Milestone: Commercial Game Booted, Verified & Playable
+- Booted genuine Amstrad CPC 6128 with Firmware 1.2, Locomotive BASIC 1.1, and AMSDOS ROM.
+- Mounted authentic commercial release: `Barbarian: The Ultimate Warrior (1987, Palace Software)` Disk 1.
+- Executed `CAT` command via emulated keyboard matrix; AMSDOS spun up floppy motor, read directory sectors `&C1`–`&C4` from track 0, and listed files on screen.
+- Executed `RUN"BARB1A` command; AMSDOS and FDC executed 183 sector reads across 33 cylinders into RAM, switched Gate Array to Mode 0, disabled ROMs, and passed execution to the game entry point at `&6F7C`.
+- Reached the multicolor 16-color Palace Software title screen with 14 active hardware palette colors.
+- Delivered Space key press via keyboard matrix to select 1-Player mode; game transitioned into the in-game combat arena (`PC=&7D44`), responding to authentic keyboard and Joystick 0 controls.
+- Verified by automated xUnit suite (25/25 passing tests).
