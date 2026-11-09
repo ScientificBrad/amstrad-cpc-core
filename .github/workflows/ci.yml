@@ -1,0 +1,51 @@
+name: Amstrad CPC Family CI & Architecture Verification
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build-and-verify:
+    name: Build, Verify Architecture & Publish
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Distribution Cleanliness Audit
+        shell: pwsh
+        run: |
+          Write-Host "Auditing Git tracked files for proprietary ROMs or disk dumps..."
+          $prohibited = git ls-files | Where-Object { $_ -match '\.(rom|ROM|dsk|DSK|cdt|tzx)$' }
+          if ($prohibited) {
+            Write-Error "PROHIBITED PROPRIETARY MEDIA DETECTED IN GIT TRACKING:`n$prohibited"
+            exit 1
+          }
+          Write-Host "CLEAN AUDIT PASSED: No proprietary media tracked in Git." -ForegroundColor Green
+
+      - name: Build Solution
+        run: |
+          dotnet build AmstradCpc.sln -c Release
+
+      - name: Run C# xUnit Test Suite
+        run: |
+          dotnet test tests/AmstradCPC.Tests/AmstradCPC.Tests.csproj -c Release --verbosity normal
+
+      - name: Publish Self-Contained Win-x64 Executable
+        run: |
+          dotnet publish src/AmstradCPC.Emulator/AmstradCPC.Emulator.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o build_output/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: amstrad-cpc-win-x64
+          path: |
+            build_output/AmstradCPC.Emulator.exe
