@@ -1,6 +1,8 @@
-# Amstrad CPC ROM Images
+# Amstrad CPC System Firmware ROMs
 
-To operate the emulator with authentic original firmware, place your legally dumped Amstrad CPC ROM files in this directory.
+This directory contains the authentic original system firmware ROMs for the Amstrad CPC family, distributed and embedded within the emulator under Amstrad's official permission.
+
+*Notice: Original Copyright © 1984–1985 Amstrad Consumer Electronics plc and Locomotive Software Ltd. Amstrad has kindly given permission for the redistribution of their copyrighted firmware material for emulation and non-commercial retrocomputing preservation, but retains that copyright.*
 
 ## Expected Files and Formats
 
@@ -21,5 +23,3 @@ To operate the emulator with authentic original firmware, place your legally dum
 
 ### Plus Series / GX4000
 - System Cartridge (`.CPR`) containing the enhanced OS, BASIC, and Burnin' Rubber game.
-
-*Notice: Proprietary ROM binaries are copyrighted by Amstrad / Locomotive Software / Schneider and are not redistributed with this source repository.*

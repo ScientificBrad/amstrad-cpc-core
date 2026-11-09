@@ -1,9 +1,17 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\roms\OS464.ROM" Link="Roms\OS464.ROM" />
+    <EmbeddedResource Include="..\..\roms\BASIC1-0.ROM" Link="Roms\BASIC1-0.ROM" />
+    <EmbeddedResource Include="..\..\roms\OS6128.ROM" Link="Roms\OS6128.ROM" />
+    <EmbeddedResource Include="..\..\roms\BASIC1-1.ROM" Link="Roms\BASIC1-1.ROM" />
+    <EmbeddedResource Include="..\..\roms\AMSDOS.ROM" Link="Roms\AMSDOS.ROM" />
+  </ItemGroup>
 
 </Project>

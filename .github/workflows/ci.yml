@@ -23,13 +23,13 @@ jobs:
       - name: Distribution Cleanliness Audit
         shell: pwsh
         run: |
-          Write-Host "Auditing Git tracked files for proprietary ROMs or disk dumps..."
-          $prohibited = git ls-files | Where-Object { $_ -match '\.(rom|ROM|dsk|DSK|cdt|tzx)$' }
+          Write-Host "Auditing Git tracked files for proprietary commercial disk/tape dumps..."
+          $prohibited = git ls-files | Where-Object { $_ -match '\.(dsk|DSK|cdt|tzx)$' }
           if ($prohibited) {
-            Write-Error "PROHIBITED PROPRIETARY MEDIA DETECTED IN GIT TRACKING:`n$prohibited"
+            Write-Error "PROHIBITED COMMERCIAL GAME MEDIA DETECTED IN GIT TRACKING:`n$prohibited"
             exit 1
           }
-          Write-Host "CLEAN AUDIT PASSED: No proprietary media tracked in Git." -ForegroundColor Green
+          Write-Host "CLEAN AUDIT PASSED: No commercial game disk/tape dumps tracked in Git." -ForegroundColor Green
 
       - name: Build Solution
         run: |

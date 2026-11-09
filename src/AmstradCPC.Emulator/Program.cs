@@ -17,22 +17,16 @@ static class Program
 
         string osPath = FindRomPath("OS464.ROM");
         string basicPath = FindRomPath("BASIC1-0.ROM");
+        string amsdosPath = FindRomPath("AMSDOS.ROM");
 
-        if (File.Exists(osPath) && File.Exists(basicPath))
-        {
-            machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
-            machine.Memory.LoadUpperRom(0, File.ReadAllBytes(basicPath));
+        machine.Memory.LoadLowerRom(BuiltInRoms.LoadRomOrFallback(osPath, "OS464.ROM"));
+        machine.Memory.LoadUpperRom(0, BuiltInRoms.LoadRomOrFallback(basicPath, "BASIC1-0.ROM"));
 
-            string amsdosPath = FindRomPath("AMSDOS.ROM");
-            if (File.Exists(amsdosPath))
-            {
-                machine.Memory.LoadUpperRom(7, File.ReadAllBytes(amsdosPath));
-            }
-        }
-        else
+        byte[]? amsdos = BuiltInRoms.GetRom("AMSDOS.ROM");
+        if (File.Exists(amsdosPath)) amsdos = File.ReadAllBytes(amsdosPath);
+        if (amsdos != null)
         {
-            MessageBox.Show($"Could not find ROMs in roms/ directory.\nPlease provide OS464.ROM and BASIC1-0.ROM.",
-                "ROM Missing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            machine.Memory.LoadUpperRom(7, amsdos);
         }
 
         Application.Run(new AmstradWindow(machine));

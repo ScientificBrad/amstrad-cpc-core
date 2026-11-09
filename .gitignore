@@ -26,15 +26,8 @@ __pycache__/
 *.bmp
 *.wav
 
-# Games / media
+# Commercial Games / user media (Clean-Room Distribution)
 games/
-
-# Proprietary ROMs and copyrighted media (Clean-Room Distribution)
-*.rom
-*.ROM
-roms/*.rom
-roms/*.ROM
-!roms/README.md
 tapes/*.cdt
 tapes/*.tzx
 !tapes/README.md

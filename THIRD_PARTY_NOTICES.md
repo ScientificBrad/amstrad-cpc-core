@@ -8,7 +8,7 @@ The **Amstrad CPC Family Hardware Reconstruction & Emulation Core** incorporates
 
 - **Amstrad OS & Firmware (v1.0, v1.1, v1.2), Locomotive BASIC (v1.0, v1.1), AMSDOS (v0.5):**  
   Original Copyright © 1984–1985 Amstrad Consumer Electronics plc and Locomotive Software Ltd.  
-  Referenced strictly for non-commercial historical computer preservation, educational research, and cycle-accurate hardware reconstruction.
+  *Amstrad has kindly given permission for the redistribution of their copyrighted firmware material for emulation and non-commercial retrocomputing preservation, but retains that copyright.*
 
 - **Zilog Z80A Microprocessor:**  
   Zilog, Inc. (1976).

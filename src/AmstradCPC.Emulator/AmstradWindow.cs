@@ -324,18 +324,18 @@ public sealed class AmstradWindow : Form
                 {
                     string osPath = FindRomPath("OS6128.ROM");
                     string basicPath = FindRomPath("BASIC1-1.ROM");
-                    if (File.Exists(osPath)) _machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
-                    if (File.Exists(basicPath)) _machine.Memory.LoadUpperRom(0, File.ReadAllBytes(basicPath));
-                    if (File.Exists(amsdosPath)) _machine.Memory.LoadUpperRom(7, File.ReadAllBytes(amsdosPath));
+                    _machine.Memory.LoadLowerRom(BuiltInRoms.LoadRomOrFallback(osPath, "OS6128.ROM"));
+                    _machine.Memory.LoadUpperRom(0, BuiltInRoms.LoadRomOrFallback(basicPath, "BASIC1-1.ROM"));
+                    _machine.Memory.LoadUpperRom(7, BuiltInRoms.LoadRomOrFallback(amsdosPath, "AMSDOS.ROM"));
                     break;
                 }
             default: // CPC464
                 {
                     string osPath = FindRomPath("OS464.ROM");
                     string basicPath = FindRomPath("BASIC1-0.ROM");
-                    if (File.Exists(osPath)) _machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
-                    if (File.Exists(basicPath)) _machine.Memory.LoadUpperRom(0, File.ReadAllBytes(basicPath));
-                    if (File.Exists(amsdosPath)) _machine.Memory.LoadUpperRom(7, File.ReadAllBytes(amsdosPath));
+                    _machine.Memory.LoadLowerRom(BuiltInRoms.LoadRomOrFallback(osPath, "OS464.ROM"));
+                    _machine.Memory.LoadUpperRom(0, BuiltInRoms.LoadRomOrFallback(basicPath, "BASIC1-0.ROM"));
+                    _machine.Memory.LoadUpperRom(7, BuiltInRoms.LoadRomOrFallback(amsdosPath, "AMSDOS.ROM"));
                     break;
                 }
         }
