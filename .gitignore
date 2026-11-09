@@ -12,6 +12,7 @@ build_output/
 .vs/
 .idea/
 .vscode/
+*.exe
 
 # Test results
 TestResults/
