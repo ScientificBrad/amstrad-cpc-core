@@ -34,8 +34,10 @@ public sealed class AmstradMachine
     // Audio sample buffer: exactly 882 samples per 50 Hz frame at 44.1 kHz
     public float[] AudioBuffer { get; } = new float[1024];
     public int AudioBufferCount { get; private set; }
-    private long _audioCyclesAccumulator = 0;
-    private float _lastPsgSample = 0f;
+    private int _crtcSubCycleCounter = 0;
+    private int _resampleAccumulator = 0;
+    private float _psgSampleSum = 0f;
+    private int _psgSampleCount = 0;
 
     public AmstradMachine(CpcModel model = CpcModel.CPC464)
     {
@@ -81,6 +83,10 @@ public sealed class AmstradMachine
         Cpu.Reset();
         TotalFrames = 0;
         AudioBufferCount = 0;
+        _crtcSubCycleCounter = 0;
+        _resampleAccumulator = 0;
+        _psgSampleSum = 0f;
+        _psgSampleCount = 0;
     }
 
     /// <summary>
@@ -90,7 +96,6 @@ public sealed class AmstradMachine
     {
         int targetCycles = CyclesPerFrame;
         int frameCycles = 0;
-        int crtcSubCycleCounter = 0;
 
         while (frameCycles < targetCycles)
         {
@@ -103,7 +108,7 @@ public sealed class AmstradMachine
 
             int stepCycles = Cpu.Step();
             frameCycles += stepCycles;
-            crtcSubCycleCounter += stepCycles;
+            _crtcSubCycleCounter += stepCycles;
 
             // Step Cassette tape player if mounted and motor is on
             if (Tape != null && Tape.IsLoaded)
@@ -112,21 +117,27 @@ public sealed class AmstradMachine
             }
 
             // Step CRTC and PSG every 4 CPU cycles (1.0 MHz character/audio clock)
-            while (crtcSubCycleCounter >= 4)
+            while (_crtcSubCycleCounter >= 4)
             {
-                crtcSubCycleCounter -= 4;
+                _crtcSubCycleCounter -= 4;
                 Crtc.StepCharacterClock();
-                _lastPsgSample = Psg.Clock();
-            }
+                float psgSample = Psg.Clock();
+                _psgSampleSum += psgSample;
+                _psgSampleCount++;
 
-            // Sample audio down to exactly 44,100 Hz (882 samples per 80,000 CPU cycles at 50 Hz)
-            _audioCyclesAccumulator += (long)stepCycles * 44100;
-            while (_audioCyclesAccumulator >= 4000000)
-            {
-                _audioCyclesAccumulator -= 4000000;
-                if (AudioBufferCount < AudioBuffer.Length)
+                // Resample directly from 1.0 MHz PSG clock to 44.1 kHz PCM
+                _resampleAccumulator += 44100;
+                if (_resampleAccumulator >= 1000000)
                 {
-                    AudioBuffer[AudioBufferCount++] = _lastPsgSample;
+                    _resampleAccumulator -= 1000000;
+                    if (AudioBufferCount < AudioBuffer.Length)
+                    {
+                        float avg = _psgSampleCount > 0 ? (_psgSampleSum / _psgSampleCount) : psgSample;
+                        _psgSampleSum = 0f;
+                        _psgSampleCount = 0;
+
+                        AudioBuffer[AudioBufferCount++] = avg;
+                    }
                 }
             }
         }

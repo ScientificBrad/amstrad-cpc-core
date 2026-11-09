@@ -59,17 +59,17 @@ public sealed class Ppi8255
     public byte ReadPortB()
     {
         // Port B Inputs:
-        // Bit 0: Cassette data in
+        // Bit 0: CRTC VSYNC signal (1 = VSYNC active, 0 = inactive)
         // Bit 1: Centronics BUSY (0 = ready)
         // Bit 2: LK1 distributor link (1 = Amstrad)
         // Bit 3: LK4 50Hz/60Hz (1 = 50 Hz PAL)
         // Bit 4: LK2 (1)
         // Bit 5: LK3 (1)
         // Bit 6: LK1 (1)
-        // Bit 7: CRTC VSYNC signal (1 = VSYNC active, 0 = inactive)
+        // Bit 7: Cassette data in
         byte b = 0x7E; // default links (Amstrad, 50 Hz)
-        if (CassetteDataIn) b |= 0x01;
-        if (_crtc.Vsync) b |= 0x80;
+        if (_crtc.Vsync) b |= 0x01;
+        if (CassetteDataIn) b |= 0x80;
         return b;
     }
 

@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
@@ -23,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\AmstradCPC.Core\AmstradCPC.Core.csproj" />
     <ProjectReference Include="..\..\src\AmstradCPC.Debugger\AmstradCPC.Debugger.csproj" />
+    <ProjectReference Include="..\..\src\AmstradCPC.Emulator\AmstradCPC.Emulator.csproj" />
   </ItemGroup>
 
 </Project>

@@ -113,4 +113,89 @@ public class FloppyAndTapeTests
         Assert.Equal(0xC2, resR); // Advanced to next sector
         Assert.Equal(2, resN);
     }
+
+    [Fact]
+    public void SubsunkDsk_InspectDirectory()
+    {
+        string dskPath = FindPath(Path.Combine("games", "Subsunk (1987)(WiCaMa)(fr).dsk"));
+        if (!File.Exists(dskPath)) return;
+        var dsk = DskImage.Load(dskPath);
+        Assert.NotNull(dsk);
+
+        // Read Track 0 sectors
+        var s1 = dsk.GetSector(0, 0, 0xC1);
+        Assert.NotNull(s1);
+
+        // Extract file from blocks
+        // On CPC System/Data format: Block size = 1024 bytes (2 sectors of 512 bytes).
+        // Block 2 = Track 1, Sectors C1 & C2
+        // Let's read Track 1 Sector C1 to check AMSDOS header
+        string b10Path = FindPath(Path.Combine("roms", "BASIC1-0.ROM"));
+        if (File.Exists(b10Path))
+        {
+            byte[] b10 = File.ReadAllBytes(b10Path);
+            // Search for "AFTER" in ROM
+            byte[] afterBytes = System.Text.Encoding.ASCII.GetBytes("AFTER");
+            int afterIdx = -1;
+            for (int i = 0; i < b10.Length - 5; i++)
+            {
+                if (b10[i] == 'A' && b10[i+1] == 'F' && b10[i+2] == 'T' && b10[i+3] == 'E' && b10[i+4] == 'R')
+                {
+                    afterIdx = i;
+                    break;
+                }
+            }
+            if (afterIdx != -1)
+            {
+                System.Console.WriteLine($"Token table found at 0x{afterIdx:X4} in BASIC 1.0");
+                // Print strings
+                int p = afterIdx;
+                int token = 0x80;
+                while (token <= 0xB8 && p < b10.Length)
+                {
+                    var sb = new System.Text.StringBuilder();
+                    while (p < b10.Length && (b10[p] & 0x80) == 0)
+                    {
+                        sb.Append((char)b10[p++]);
+                    }
+                    if (p < b10.Length) sb.Append((char)(b10[p++] & 0x7F)); // last char has bit 7 set
+                    System.Console.WriteLine($"Token 0x{token:X2}: {sb}");
+                    token++;
+                }
+            }
+        }
+        var fileBytes = new System.Collections.Generic.List<byte>();
+        // Block 2: T0 SC5, SC6
+        // Block 3: T0 SC7, SC8
+        // Block 4: T0 SC9, T1 SC1...
+        // Let's iterate all sectors on disk in order:
+        for (int t = 0; t < dsk.TrackCount; t++)
+        {
+            for (byte r = 0xC1; r <= 0xC9; r++)
+            {
+                if (t == 0 && r < 0xC5) continue; // skip directory
+                var s = dsk.GetSector(t, 0, r);
+                if (s != null) fileBytes.AddRange(s.Data);
+            }
+        }
+
+        // Skip 128-byte AMSDOS header
+        int ptr = 128;
+        while (ptr + 4 < fileBytes.Count)
+        {
+            int lineLen = fileBytes[ptr] | (fileBytes[ptr + 1] << 8);
+            if (lineLen == 0) break;
+            int lineNum = fileBytes[ptr + 2] | (fileBytes[ptr + 3] << 8);
+
+            if (lineNum >= 2240 && lineNum <= 2260)
+            {
+                byte[] lineData = fileBytes.Skip(ptr + 4).Take(lineLen - 4).ToArray();
+                string hex = string.Join(" ", lineData.Select(b => $"{b:X2}"));
+                string ascii = new string(lineData.Select(b => (b >= 32 && b < 127) ? (char)b : '.').ToArray());
+                System.Console.WriteLine($"[LINE {lineNum}] {hex} | {ascii}");
+            }
+
+            ptr += lineLen;
+        }
+    }
 }

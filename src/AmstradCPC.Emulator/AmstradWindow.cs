@@ -51,6 +51,8 @@ public sealed class AmstradWindow : Form
     private readonly SolidBrush _fpsBgBrush = new(Color.FromArgb(180, Color.Black));
     private readonly Font _fpsFont = new("Consolas", 10, FontStyle.Bold);
 
+    private KeyboardMatrixViewerForm? _matrixViewerForm;
+
     public AmstradWindow(AmstradMachine machine)
     {
         _machine = machine;
@@ -79,6 +81,7 @@ public sealed class AmstradWindow : Form
         KeyUp += OnWindowKeyUp;
         Deactivate += (s, e) => _machine.Keyboard.Reset(); // Clear stuck keys on focus loss
         Paint += OnWindowPaint;
+        MouseDown += (s, e) => this.Focus();
 
         // Drag & Drop media support
         AllowDrop = true;
@@ -115,15 +118,70 @@ public sealed class AmstradWindow : Form
 
     private static int ScreenHeightEffective() => ScreenRenderer.ScreenHeight * 2; // 544 lines
 
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_KEYDOWN = 0x0100;
+        const int WM_KEYUP = 0x0101;
+        const int WM_SYSKEYDOWN = 0x0104;
+        const int WM_SYSKEYUP = 0x0105;
+
+        if (m.Msg == WM_KEYDOWN || m.Msg == WM_SYSKEYDOWN)
+        {
+            Keys key = (Keys)(long)m.WParam;
+            if (key == Keys.F12)
+            {
+                OnShowKeyboardMatrixViewer(this, EventArgs.Empty);
+            }
+            else
+            {
+                MapKey(key, pressed: true);
+            }
+        }
+        else if (m.Msg == WM_KEYUP || m.Msg == WM_SYSKEYUP)
+        {
+            Keys key = (Keys)(long)m.WParam;
+            if (key != Keys.F12)
+            {
+                MapKey(key, pressed: false);
+            }
+        }
+
+        base.WndProc(ref m);
+    }
+
     protected override bool ProcessDialogKey(Keys keyData)
     {
-        // Prevent Windows Forms from intercepting Arrow keys and Tab as dialog focus keys
+        // Prevent Windows Forms from intercepting emulator keys as dialog focus/navigation keys
         Keys key = keyData & Keys.KeyCode;
-        if (key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down || key == Keys.Tab)
+        if (key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down ||
+            key == Keys.Tab || key == Keys.Return || key == Keys.Space || key == Keys.Escape ||
+            (key >= Keys.F1 && key <= Keys.F12))
         {
             return false;
         }
         return base.ProcessDialogKey(keyData);
+    }
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        Keys key = keyData & Keys.KeyCode;
+
+        // Preserve menu accelerators (Ctrl+R for Reset, Ctrl+P for Pause)
+        if ((keyData & Keys.Control) != 0 && (key == Keys.R || key == Keys.P))
+        {
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        // Prevent Windows Forms menu strip from swallowing F10, Enter, Space, Escape, Tab, Arrows, or Function keys
+        if (key == Keys.F10 || key == Keys.Return || key == Keys.Space ||
+            key == Keys.Tab || key == Keys.Escape ||
+            key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down ||
+            (key >= Keys.F1 && key <= Keys.F12))
+        {
+            return false;
+        }
+
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private MenuStrip CreateMenuStrip()
@@ -138,7 +196,7 @@ public sealed class AmstradWindow : Form
         var cpcPlusItem = new ToolStripMenuItem("CPC 464 / 6128 Plus [Phase 11 Milestone]") { Enabled = false };
         var gx4000Item = new ToolStripMenuItem("GX4000 Console [Phase 11 Milestone]") { Enabled = false };
         var resetItem = new ToolStripMenuItem("&Reset", null, (s, e) => _machine.Reset(), Keys.Control | Keys.R);
-        var pauseItem = new ToolStripMenuItem("&Pause / Resume", null, (s, e) => _paused = !_paused, Keys.Pause);
+        var pauseItem = new ToolStripMenuItem("&Pause / Resume", null, (s, e) => _paused = !_paused, Keys.Control | Keys.P);
 
         machineMenu.DropDownItems.AddRange(new ToolStripItem[] {
             _cpc464Item, _cpc664Item, _cpc6128Item,
@@ -183,14 +241,34 @@ public sealed class AmstradWindow : Form
 
         // Audio Menu
         var audioMenu = new ToolStripMenuItem("&Audio");
-        var muteItem = new ToolStripMenuItem("Mute Audio", null, (s, e) => { });
-        audioMenu.DropDownItems.Add(muteItem);
+        var muteItem = new ToolStripMenuItem("Mute Audio", null, (s, e) => {
+            _audio.Muted = !_audio.Muted;
+            if (s is ToolStripMenuItem mi) mi.Checked = _audio.Muted;
+        }) { Checked = _audio.Muted };
+
+        var vol100 = new ToolStripMenuItem("Volume 100%", null);
+        var vol75 = new ToolStripMenuItem("Volume 75%", null);
+        var vol50 = new ToolStripMenuItem("Volume 50%", null);
+        var vol25 = new ToolStripMenuItem("Volume 25%", null);
+
+        vol100.Checked = true;
+        vol100.Click += (s, e) => SetVolume(1.0f, vol100, vol75, vol50, vol25);
+        vol75.Click += (s, e) => SetVolume(0.75f, vol75, vol100, vol50, vol25);
+        vol50.Click += (s, e) => SetVolume(0.50f, vol50, vol100, vol75, vol25);
+        vol25.Click += (s, e) => SetVolume(0.25f, vol25, vol100, vol75, vol50);
+
+        audioMenu.DropDownItems.AddRange(new ToolStripItem[] {
+            muteItem,
+            new ToolStripSeparator(),
+            vol100, vol75, vol50, vol25
+        });
 
         // Tools Menu
         var toolsMenu = new ToolStripMenuItem("&Tools");
+        var matrixViewerItem = new ToolStripMenuItem("Keyboard Matrix Viewer (F12)", null, OnShowKeyboardMatrixViewer);
         var regsItem = new ToolStripMenuItem("Z80 Register State", null, OnShowRegisters);
         var traceItem = new ToolStripMenuItem("CPU Execution Trace", null, OnShowTrace);
-        toolsMenu.DropDownItems.AddRange(new ToolStripItem[] { regsItem, traceItem });
+        toolsMenu.DropDownItems.AddRange(new ToolStripItem[] { matrixViewerItem, new ToolStripSeparator(), regsItem, traceItem });
 
         menu.Items.AddRange(new ToolStripItem[] { machineMenu, mediaMenu, displayMenu, audioMenu, toolsMenu });
         return menu;
@@ -232,6 +310,7 @@ public sealed class AmstradWindow : Form
             if (_cpc6128Item != null) _cpc6128Item.Checked = (model == CpcModel.CPC6128);
 
             _machine.Reset();
+            _audio.Reset();
         }
     }
 
@@ -313,6 +392,23 @@ public sealed class AmstradWindow : Form
                 MessageBox.Show("Failed to parse DSK floppy disk image.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
+    }
+
+    private void SetVolume(float vol, ToolStripMenuItem active, params ToolStripMenuItem[] others)
+    {
+        _audio.Volume = vol;
+        active.Checked = true;
+        foreach (var item in others) item.Checked = false;
+    }
+
+    private void OnShowKeyboardMatrixViewer(object? sender, EventArgs e)
+    {
+        if (_matrixViewerForm == null || _matrixViewerForm.IsDisposed)
+        {
+            _matrixViewerForm = new KeyboardMatrixViewerForm(_machine);
+        }
+        _matrixViewerForm.Show();
+        _matrixViewerForm.BringToFront();
     }
 
     private void OnShowRegisters(object? sender, EventArgs e)
@@ -411,19 +507,22 @@ public sealed class AmstradWindow : Form
                 }
             }
 
-            // High precision timing loop for consistent 50.0 FPS
-            long currentTicks = stopwatch.ElapsedTicks;
-            long remainingTicks = nextTargetTicks - currentTicks;
-            if (remainingTicks > 0)
+            // High precision timing loop with audio dynamic rate pacing
+            if (_audio.QueuedCount >= 3)
             {
-                int remainingMs = (int)(remainingTicks * 1000 / Stopwatch.Frequency);
-                if (remainingMs > 2)
+                long currentTicks = stopwatch.ElapsedTicks;
+                long remainingTicks = nextTargetTicks - currentTicks;
+                if (remainingTicks > 0)
                 {
-                    Thread.Sleep(remainingMs - 1);
-                }
-                while (stopwatch.ElapsedTicks < nextTargetTicks)
-                {
-                    Thread.Yield();
+                    int remainingMs = (int)(remainingTicks * 1000 / Stopwatch.Frequency);
+                    if (remainingMs > 2)
+                    {
+                        Thread.Sleep(remainingMs - 1);
+                    }
+                    while (stopwatch.ElapsedTicks < nextTargetTicks)
+                    {
+                        Thread.Yield();
+                    }
                 }
             }
 
@@ -481,7 +580,11 @@ public sealed class AmstradWindow : Form
 
     private void MapKey(Keys key, bool pressed)
     {
-        var kb = _machine.Keyboard;
+        MapKey(_machine.Keyboard, key, pressed);
+    }
+
+    public static void MapKey(KeyboardMatrix kb, Keys key, bool pressed)
+    {
         switch (key)
         {
             // Row 0: Numpad and cursors (and Joy0 emulation)
@@ -509,19 +612,40 @@ public sealed class AmstradWindow : Form
             case Keys.F9: kb.SetKeyState(0, 3, pressed); break;
 
             // Row 1: Function keys
-            case Keys.NumPad0: kb.SetKeyState(1, 7, pressed); break;
-            case Keys.NumPad2: kb.SetKeyState(1, 6, pressed); break;
-            case Keys.NumPad1: kb.SetKeyState(1, 5, pressed); break;
-            case Keys.NumPad5: kb.SetKeyState(1, 4, pressed); break;
-            case Keys.NumPad8: kb.SetKeyState(1, 3, pressed); break;
-            case Keys.NumPad7: kb.SetKeyState(1, 2, pressed); break;
+            case Keys.NumPad0:
+            case Keys.F10:
+                kb.SetKeyState(1, 7, pressed);
+                break;
+            case Keys.NumPad2:
+            case Keys.F2:
+                kb.SetKeyState(1, 6, pressed);
+                break;
+            case Keys.NumPad1:
+            case Keys.F1:
+                kb.SetKeyState(1, 5, pressed);
+                break;
+            case Keys.NumPad5:
+            case Keys.F5:
+                kb.SetKeyState(1, 4, pressed);
+                break;
+            case Keys.NumPad8:
+            case Keys.F8:
+                kb.SetKeyState(1, 3, pressed);
+                break;
+            case Keys.NumPad7:
+            case Keys.F7:
+                kb.SetKeyState(1, 2, pressed);
+                break;
 
             // Row 2: Control, Return, Shift, F4
             case Keys.ControlKey: kb.SetKeyState(2, 7, pressed); break;
             case Keys.ShiftKey: kb.SetKeyState(2, 5, pressed); break;
             case Keys.NumPad4:
             case Keys.F4: kb.SetKeyState(2, 4, pressed); break;
-            case Keys.Return: kb.SetKeyState(2, 2, pressed); break;
+            case Keys.Return:
+                kb.SetKeyState(2, 2, pressed);
+                kb.SetKeyState(0, 6, pressed); // NumPad Enter
+                break;
 
             // Row 3: Symbols & P
             case Keys.P: kb.SetKeyState(3, 3, pressed); break;
@@ -544,6 +668,7 @@ public sealed class AmstradWindow : Form
             case Keys.Space:
                 kb.SetKeyState(5, 7, pressed);
                 kb.SetKeyState(9, 4, pressed); // Joy0 Fire 1
+
                 break;
             case Keys.Alt:
             case Keys.Menu:

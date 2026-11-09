@@ -23,6 +23,7 @@ __pycache__/
 *.tmp
 *.raw
 *.bmp
+*.wav
 
 # Games / media
 games/

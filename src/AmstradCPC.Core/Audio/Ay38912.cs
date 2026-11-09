@@ -27,13 +27,15 @@ public sealed class Ay38912
     private int _noiseLfsr = 1;
     private bool _noiseOutput = true;
 
-    // Envelope generator
+    // Envelope generator (MAME silicon-verified state machine)
     private int _envPeriod = 1;
     private int _envCounter = 0;
+    private int _envStep = 15;
     private int _envVolume = 0;
     private bool _envHolding = false;
     private bool _envAlternate = false;
-    private bool _envAttack = false;
+
+    public int EnvelopeVolume => _envVolume;
 
     // 16-level logarithmic DAC volume table
     private static readonly float[] DacTable = new float[16]
@@ -71,10 +73,7 @@ public sealed class Ay38912
 
         _envPeriod = 1;
         _envCounter = 0;
-        _envVolume = 0;
-        _envHolding = false;
-        _envAlternate = false;
-        _envAttack = false;
+        TriggerEnvelope();
     }
 
     public void SelectRegister(byte reg)
@@ -117,73 +116,106 @@ public sealed class Ay38912
 
         if (SelectedRegister == 13)
         {
-            // Reset envelope generator on write to shape register
-            byte shape = (byte)(Registers[13] & 0x0F);
-            _envAttack = (shape & 0x04) != 0;
-            _envAlternate = (shape & 0x02) != 0;
-            _envHolding = (shape & 0x01) != 0;
-            _envVolume = _envAttack ? 0 : 15;
-            _envCounter = 0;
+            // Reset envelope generator on write to shape register (silicon AY-3-8910 behavior)
+            TriggerEnvelope();
         }
+    }
+
+    public void TriggerEnvelope()
+    {
+        _envStep = 15;
+        _envHolding = false;
+        _envAlternate = false;
+        _envCounter = 0;
+        UpdateEnvelopeVolume();
+    }
+
+    private void UpdateEnvelopeVolume()
+    {
+        byte shape = (byte)(Registers[13] & 0x0F);
+        bool continueBit = (shape & 0x08) != 0;
+        bool attackBit = (shape & 0x04) != 0;
+
+        if (!continueBit && _envHolding)
+        {
+            _envVolume = 0;
+            return;
+        }
+
+        int vol = _envStep;
+        if (attackBit ^ _envAlternate)
+        {
+            vol = 15 - vol;
+        }
+        _envVolume = vol;
     }
 
     /// <summary>
     /// Clocked at 1.0 MHz (1 PSG cycle = 4 Z80 cycles = 1 µs).
-    /// Returns the mixed floating-point audio sample (-1.0 to 1.0).
+    /// Returns the mixed floating-point audio sample (0.0 to 1.0).
     /// </summary>
     public float Clock()
     {
-        // Clock Tone Generators
+        // Clock Tone Generators: Authentic AY-3-8910 tone countdown (toggles every 8 * TonePeriod clocks)
         for (int i = 0; i < 3; i++)
         {
             _toneCounters[i]++;
-            if (_toneCounters[i] >= _tonePeriods[i])
+            if (_toneCounters[i] >= (_tonePeriods[i] * 8))
             {
                 _toneCounters[i] = 0;
                 _toneOutputs[i] = !_toneOutputs[i];
             }
         }
 
-        // Clock Noise Generator (every 2 PSG cycles or according to period)
+        // Clock Noise Generator: shifts every 16 * NoisePeriod clocks using authentic 17-bit LFSR
         _noiseCounter++;
-        if (_noiseCounter >= (_noisePeriod * 2))
+        if (_noiseCounter >= (_noisePeriod * 16))
         {
             _noiseCounter = 0;
-            if ((_noiseLfsr & 1) != 0)
-            {
-                _noiseLfsr ^= 0x24000;
-                _noiseOutput = !_noiseOutput;
-            }
-            _noiseLfsr >>= 1;
+            int feedback = ((_noiseLfsr & 1) ^ ((_noiseLfsr >> 3) & 1));
+            _noiseLfsr = (_noiseLfsr >> 1) | (feedback << 16);
+            _noiseOutput = (_noiseLfsr & 1) != 0;
         }
 
-        // Clock Envelope Generator
+        // Clock Envelope Generator: steps volume every 16 * EnvPeriod clocks
         _envCounter++;
-        if (_envCounter >= (_envPeriod * 2))
+        if (_envCounter >= (_envPeriod * 16))
         {
             _envCounter = 0;
             if (!_envHolding)
             {
-                if (_envAttack)
+                _envStep--;
+                if (_envStep < 0)
                 {
-                    if (_envVolume < 15) _envVolume++;
+                    byte shape = (byte)(Registers[13] & 0x0F);
+                    bool continueBit = (shape & 0x08) != 0;
+                    bool alternateBit = (shape & 0x02) != 0;
+                    bool holdBit = (shape & 0x01) != 0;
+
+                    if (!continueBit)
+                    {
+                        // Shapes 0-7: single ramp, then 0 forever
+                        _envStep = 0;
+                        _envHolding = true;
+                    }
                     else
                     {
-                        if (_envAlternate) { _envAttack = false; _envVolume = 15; }
-                        else if ((Registers[13] & 0x08) == 0) { _envVolume = 0; _envHolding = true; }
-                        else { _envVolume = 0; }
+                        if (holdBit)
+                        {
+                            if (alternateBit)
+                                _envAlternate = !_envAlternate;
+                            _envStep = 0;
+                            _envHolding = true;
+                        }
+                        else
+                        {
+                            if (alternateBit)
+                                _envAlternate = !_envAlternate;
+                            _envStep = 15;
+                        }
                     }
                 }
-                else
-                {
-                    if (_envVolume > 0) _envVolume--;
-                    else
-                    {
-                        if (_envAlternate) { _envAttack = true; _envVolume = 0; }
-                        else if ((Registers[13] & 0x08) == 0) { _envVolume = 0; _envHolding = true; }
-                        else { _envVolume = 15; }
-                    }
-                }
+                UpdateEnvelopeVolume();
             }
         }
 
@@ -193,19 +225,27 @@ public sealed class Ay38912
 
         for (int ch = 0; ch < 3; ch++)
         {
+            byte ampReg = Registers[8 + ch];
+            int volume = (ampReg & 0x10) != 0 ? _envVolume : (ampReg & 0x0F);
+            if (volume == 0) continue;
+            float amp = DacTable[volume];
+
             bool toneDisabled = (mixer & (1 << ch)) != 0;
             bool noiseDisabled = (mixer & (1 << (ch + 3))) != 0;
 
-            bool chanOut = (toneDisabled || _toneOutputs[ch]) && (noiseDisabled || _noiseOutput);
-
-            if (chanOut)
+            if (toneDisabled && noiseDisabled)
             {
-                byte ampReg = Registers[8 + ch];
-                int volume = (ampReg & 0x10) != 0 ? _envVolume : (ampReg & 0x0F);
-                sample += DacTable[volume];
+                // Direct DAC PCM mode (used for digitized sound/speech)
+                sample += (amp - 0.5f);
+            }
+            else
+            {
+                // Pure AC square/noise output centered around zero (eliminates DC offset and popping)
+                bool chanOut = (toneDisabled || _toneOutputs[ch]) && (noiseDisabled || _noiseOutput);
+                sample += chanOut ? (amp * 0.5f) : (-amp * 0.5f);
             }
         }
 
-        return (sample / 3.0f); // Normalize to 0.0 - 1.0
+        return (sample / 1.5f); // Normalized bipolar audio (-1.0 to 1.0)
     }
 }

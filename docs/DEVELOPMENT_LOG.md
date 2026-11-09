@@ -50,3 +50,25 @@
 - Reached the multicolor 16-color Palace Software title screen with 14 active hardware palette colors.
 - Delivered Space key press via keyboard matrix to select 1-Player mode; game transitioned into the in-game combat arena (`PC=&7D44`), responding to authentic keyboard and Joystick 0 controls.
 - Verified by automated xUnit suite (25/25 passing tests).
+
+---
+
+### Milestone 3 — Keyboard Authenticity & Audio Prescaler Refinement
+
+#### 1. Hardware-Accurate Keyboard Matrix & Elimination of Synthetic Injections
+- **Root Cause Analysis:** Synthetic F7 injection on Enter and Space caused Locomotive BASIC to register `f7` (keypad 7) concurrently with Return, mutating `CAT` into `CAT7` (Syntax error).
+- **Corrected Hardware Mapping:**
+  - `Enter`/`Return`: strictly asserted at keyboard Row 2, Column 2 only.
+  - `Space`: strictly asserted at keyboard Row 5, Column 7 (with existing Joy0 Fire 1 at Row 9, Column 4).
+  - `F7`/`NumPad7`: strictly asserted at keyboard Row 1, Column 2 only.
+  - All keys strictly assert on KeyDown and release matching matrix positions on KeyUp.
+- **Menu/Dialog Bypass:** Overrode `ProcessDialogKey` and `ProcessCmdKey` in `AmstradWindow.cs` to prevent WinForms from swallowing Enter, Space, Escape, Tab, Arrows, and Function keys (`F1`..`F12`), while preserving `Ctrl+R` (Reset) and `Ctrl+P` (Pause/Resume) menu accelerators.
+- **Regression Verification:** Added `KeyboardRegressionTests.cs` (5 tests) verifying isolated assertions for Enter, Space, F7, and key releases. Verified that `CAT` in BASIC executes directory sector reads without appending 7 or producing Syntax error, followed by `RUN"BARB1A"` and actual `F7` on DEMO screen to start combat.
+
+#### 2. General Instrument AY-3-8912 Audio Engine Dialed In
+- Implemented authentic AY-3-8910/8912 hardware prescalers:
+  - Tone counters countdown toggling every $8 \times TP$ master clocks ($f_T = f_{\text{CLOCK}} / (16 \times TP)$).
+  - Noise LFSR shifting every $16 \times NP$ master clocks.
+  - Envelope generator stepping volume every $16 \times EP$ master clocks.
+- Replaced point-sampling with oversampled box-filter integration (multi-sample averaging across each 44.1 kHz window), eliminating aliasing distortion.
+- Added 1st-order High-Pass DC-blocking filter ($R=0.995$, $f_c \approx 35\text{ Hz}$), removing DAC unipolar DC offset pops.

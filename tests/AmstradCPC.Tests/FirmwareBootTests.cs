@@ -1,5 +1,6 @@
 using AmstradCPC.Core.Cpu;
 using AmstradCPC.Core.Machine;
+using AmstradCPC.Core.Video;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -105,5 +106,101 @@ public class FirmwareBootTests
         Assert.Equal(40, machine.Crtc.Registers[1]);
         Assert.Equal(25, machine.Crtc.Registers[6]);
         Assert.Equal(0x30, machine.Crtc.Registers[12]); // $C000 >> 8 / 4 = 0x30
+    }
+
+    [Fact]
+    public void PpiPortB_VsyncBitMapping_And_FirmwareFlybackWait_Succeeds()
+    {
+        string osPath = FindRomPath("OS6128.ROM");
+        string basicPath = FindRomPath("BASIC1-1.ROM");
+
+        var machine = new AmstradMachine(AmstradCPC.Core.Memory.CpcModel.CPC6128);
+        machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
+        machine.Memory.LoadUpperRom(0, File.ReadAllBytes(basicPath));
+
+        // 1. Direct hardware check: PPI Port B bit 0 is CRTC VSYNC
+        Assert.False((machine.Ppi.ReadPortB() & 0x01) != 0, "VSYNC should not be active initially");
+        // Step character clocks until VSYNC occurs
+        bool vsyncSeen = false;
+        for (int i = 0; i < 20000; i++)
+        {
+            machine.Crtc.StepCharacterClock();
+            if ((machine.Ppi.ReadPortB() & 0x01) != 0)
+            {
+                vsyncSeen = true;
+                break;
+            }
+        }
+        Assert.True(vsyncSeen, "PPI Port B bit 0 must assert high during CRTC VSYNC");
+
+        // 2. Firmware routine 0x07B4: MC WAIT FLYBACK
+        // Setup CPU to call 0x07B4 and verify it returns promptly when CRTC generates VSYNC
+        machine.Cpu.Reg.PC = 0x07B4;
+        machine.Memory.Write(0xC000, 0x00); // NOP for return address
+        machine.Cpu.Reg.SP = 0xBFFE;
+        machine.Memory.Write(0xBFFE, 0x00); // Return address low
+        machine.Memory.Write(0xBFFF, 0xC0); // Return address high
+
+        int maxInstructions = 100000;
+        int instructionsRun = 0;
+        int crtcAccum = 0;
+        while (machine.Cpu.Reg.PC != 0xC000 && instructionsRun < maxInstructions)
+        {
+            int cycles = machine.Cpu.Step();
+            crtcAccum += cycles;
+            while (crtcAccum >= 4)
+            {
+                crtcAccum -= 4;
+                machine.Crtc.StepCharacterClock();
+            }
+            instructionsRun++;
+        }
+
+        Assert.Equal(0xC000, machine.Cpu.Reg.PC);
+        _output.WriteLine($"MC WAIT FLYBACK (0x07B4) successfully completed in {instructionsRun} instructions without freezing.");
+    }
+
+    [Fact]
+    public void AuthenticFirmware_BootToPrompt_SavesScreenshots()
+    {
+        string osPath = FindRomPath("OS464.ROM");
+        string basicPath = FindRomPath("BASIC1-0.ROM");
+
+        var machine = new AmstradMachine(AmstradCPC.Core.Memory.CpcModel.CPC464);
+        machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
+        machine.Memory.LoadUpperRom(0, File.ReadAllBytes(basicPath));
+
+        // Step 40 frames to reach BASIC prompt
+        for (int f = 0; f < 40; f++) machine.StepFrame();
+        machine.Renderer.RenderFullFrame();
+
+        string imgDir = Path.Combine(@"D:\Emulation\Amstrad", "docs", "images");
+        Directory.CreateDirectory(imgDir);
+        SaveFramebufferAsPng(Path.Combine(imgDir, "01_cpc464_boot.png"), machine.Renderer.Framebuffer, ScreenRenderer.ScreenWidth, ScreenRenderer.ScreenHeight);
+
+        // CPC 6128
+        string os6128Path = FindRomPath("OS6128.ROM");
+        string basic6128Path = FindRomPath("BASIC1-1.ROM");
+        string amsdosPath = FindRomPath("AMSDOS.ROM");
+
+        var m6128 = new AmstradMachine(AmstradCPC.Core.Memory.CpcModel.CPC6128);
+        m6128.Memory.LoadLowerRom(File.ReadAllBytes(os6128Path));
+        m6128.Memory.LoadUpperRom(0, File.ReadAllBytes(basic6128Path));
+        m6128.Memory.LoadUpperRom(7, File.ReadAllBytes(amsdosPath));
+
+        for (int f = 0; f < 50; f++) m6128.StepFrame();
+        m6128.Renderer.RenderFullFrame();
+        SaveFramebufferAsPng(Path.Combine(imgDir, "05_cpc6128_boot.png"), m6128.Renderer.Framebuffer, ScreenRenderer.ScreenWidth, ScreenRenderer.ScreenHeight);
+    }
+
+    private static void SaveFramebufferAsPng(string path, uint[] fb, int width, int height)
+    {
+        using var bmp = new System.Drawing.Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
+        var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, width, height), System.Drawing.Imaging.ImageLockMode.WriteOnly, bmp.PixelFormat);
+        int[] intData = new int[fb.Length];
+        for (int i = 0; i < fb.Length; i++) intData[i] = unchecked((int)fb[i]);
+        System.Runtime.InteropServices.Marshal.Copy(intData, 0, data.Scan0, intData.Length);
+        bmp.UnlockBits(data);
+        bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
     }
 }

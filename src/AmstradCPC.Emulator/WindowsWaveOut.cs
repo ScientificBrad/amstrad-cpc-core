@@ -11,6 +11,7 @@ internal sealed class WindowsWaveOut : IDisposable
 {
     private const int Slots = 16;
     private const int MaxSamples = 2048;
+    private const uint WHDR_DONE = 0x00000001;
     private static readonly int HeaderSize = Marshal.SizeOf<WaveHeader>();
 
     [StructLayout(LayoutKind.Sequential, Pack = 2)]
@@ -59,6 +60,27 @@ internal sealed class WindowsWaveOut : IDisposable
     private int _next;
     private bool _disposed;
 
+    public bool Muted { get; set; } = false;
+    public float Volume { get; set; } = 1.0f;
+
+    public int QueuedCount
+    {
+        get
+        {
+            if (_handle == IntPtr.Zero || _disposed) return 0;
+            int count = 0;
+            for (int i = 0; i < Slots; i++)
+            {
+                if (_prepared[i])
+                {
+                    var hdr = Marshal.PtrToStructure<WaveHeader>(_headers[i]);
+                    if ((hdr.Flags & WHDR_DONE) == 0) count++;
+                }
+            }
+            return count;
+        }
+    }
+
     public WindowsWaveOut()
     {
         var format = new WaveFormat
@@ -91,17 +113,37 @@ internal sealed class WindowsWaveOut : IDisposable
 
         count = Math.Min(count, MaxSamples);
         short[] pcm = new short[count];
-        for (int i = 0; i < count; i++)
+        if (!Muted)
         {
-            float s = Math.Clamp(samples[i], -1.0f, 1.0f);
-            pcm[i] = (short)(s * 32767f);
+            float vol = Math.Clamp(Volume, 0f, 1f);
+            for (int i = 0; i < count; i++)
+            {
+                float s = Math.Clamp(samples[i] * vol, -1.0f, 1.0f);
+                pcm[i] = (short)(s * 28000f);
+            }
+        }
+
+        // Maintain comfortable queue depth (target 3-4 buffers = 60-80 ms of latency).
+        // If queue exceeds 5 buffers, wait briefly for driver to play oldest buffer (never drop audio frames!).
+        int waitMs = 25;
+        while (QueuedCount >= 5 && waitMs-- > 0)
+        {
+            Thread.Sleep(1);
         }
 
         int slot = _next;
-        _next = (_next + 1) % Slots;
-
         if (_prepared[slot])
         {
+            var hdr = Marshal.PtrToStructure<WaveHeader>(_headers[slot]);
+            if ((hdr.Flags & WHDR_DONE) == 0)
+            {
+                int spin = 10;
+                while ((hdr.Flags & WHDR_DONE) == 0 && spin-- > 0)
+                {
+                    Thread.Sleep(1);
+                    hdr = Marshal.PtrToStructure<WaveHeader>(_headers[slot]);
+                }
+            }
             waveOutUnprepareHeader(_handle, _headers[slot], (uint)HeaderSize);
             _prepared[slot] = false;
         }
@@ -119,7 +161,23 @@ internal sealed class WindowsWaveOut : IDisposable
         {
             _prepared[slot] = true;
             waveOutWrite(_handle, _headers[slot], (uint)HeaderSize);
+            _next = (_next + 1) % Slots;
         }
+    }
+
+    public void Reset()
+    {
+        if (_handle == IntPtr.Zero || _disposed) return;
+        waveOutReset(_handle);
+        for (int i = 0; i < Slots; i++)
+        {
+            if (_prepared[i])
+            {
+                waveOutUnprepareHeader(_handle, _headers[i], (uint)HeaderSize);
+                _prepared[i] = false;
+            }
+        }
+        _next = 0;
     }
 
     public void Dispose()

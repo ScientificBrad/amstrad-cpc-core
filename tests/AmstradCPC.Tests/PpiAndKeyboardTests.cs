@@ -42,4 +42,38 @@ public class PpiAndKeyboardTests
         byte valRow6 = ppi.ReadPortA();
         Assert.Equal(0xFF, valRow6);
     }
+
+    [Fact]
+    public void Ay38912_ToneGenerator_ProducesSquareWaveAtCorrectFrequency()
+    {
+        var keyboard = new KeyboardMatrix();
+        var ay = new Ay38912(keyboard);
+
+        // Configure Channel A: Period = 100, Tone enabled, Volume = 15
+        ay.SelectRegister(0);
+        ay.WriteData(100); // Period low
+        ay.SelectRegister(1);
+        ay.WriteData(0);   // Period high
+        ay.SelectRegister(7);
+        ay.WriteData(0xFE); // Mixer: Enable Channel A tone (bit 0 = 0)
+        ay.SelectRegister(8);
+        ay.WriteData(15);  // Volume = 15 (max)
+
+        // With period = 100, countdown is 8 * 100 = 800 cycles per half-wave toggle
+        int toggles = 0;
+        float prevSample = ay.Clock();
+
+        for (int i = 0; i < 3200; i++) // 4 half-waves = 2 full cycles
+        {
+            float sample = ay.Clock();
+            if ((prevSample > 0.1f && sample < 0.1f) || (prevSample < 0.1f && sample > 0.1f))
+            {
+                toggles++;
+            }
+            prevSample = sample;
+        }
+
+        // Over 3,200 PSG clock cycles with half-wave duration 800: exactly 4 toggles!
+        Assert.Equal(4, toggles);
+    }
 }
