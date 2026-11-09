@@ -230,7 +230,7 @@ public class AudioSubsystemTests
             }
         }
 
-        string wavPath = Path.Combine(@"D:\Emulation\Amstrad", "a440_test_tone.wav");
+        string wavPath = Path.Combine(Path.GetTempPath(), "a440_test_tone.wav");
         WriteWav(wavPath, pcm, 44100);
         Assert.True(File.Exists(wavPath));
         var fi = new FileInfo(wavPath);

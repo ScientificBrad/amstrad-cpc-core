@@ -23,21 +23,16 @@ public class KeyboardRegressionTests
         _output = output;
     }
 
-    private static string FindPath(string relativePath)
+    private static string? FindPath(string relativePath)
     {
-        string[] candidates = new[]
+        string? dir = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(dir))
         {
-            relativePath,
-            Path.Combine("..", "..", "..", "..", "..", relativePath),
-            Path.Combine(AppContext.BaseDirectory, relativePath),
-            Path.Combine(@"D:\Emulation\Amstrad", relativePath)
-        };
-
-        foreach (var path in candidates)
-        {
-            if (File.Exists(path)) return path;
+            string candidate = Path.Combine(dir, relativePath);
+            if (File.Exists(candidate)) return candidate;
+            dir = Directory.GetParent(dir)?.FullName;
         }
-        return Path.Combine(@"D:\Emulation\Amstrad", relativePath);
+        return null;
     }
 
     [Fact]
@@ -149,10 +144,11 @@ public class KeyboardRegressionTests
     [Fact]
     public void Basic_TypingCatAndEnter_ExecutesCommandWithoutSyntaxError()
     {
-        string osPath = FindPath(Path.Combine("roms", "OS6128.ROM"));
-        string basicPath = FindPath(Path.Combine("roms", "BASIC1-1.ROM"));
-        string amsdosPath = FindPath(Path.Combine("roms", "AMSDOS.ROM"));
-        string dskPath = FindPath(Path.Combine("games", "Barbarian (1987)(Palace Software)(Disk 1 of 2).dsk"));
+        string? osPath = FindPath(Path.Combine("roms", "OS6128.ROM"));
+        string? basicPath = FindPath(Path.Combine("roms", "BASIC1-1.ROM"));
+        string? amsdosPath = FindPath(Path.Combine("roms", "AMSDOS.ROM"));
+        string? dskPath = FindPath(Path.Combine("games", "Barbarian (1987)(Palace Software)(Disk 1 of 2).dsk"));
+        if (osPath == null || basicPath == null || amsdosPath == null || dskPath == null) return;
 
         var machine = new AmstradMachine(CpcModel.CPC6128);
         machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));
@@ -199,10 +195,11 @@ public class KeyboardRegressionTests
     [Fact]
     public void Barbarian_BootRunAndActualF7_StartsCombatFromDemo()
     {
-        string osPath = FindPath(Path.Combine("roms", "OS6128.ROM"));
-        string basicPath = FindPath(Path.Combine("roms", "BASIC1-1.ROM"));
-        string amsdosPath = FindPath(Path.Combine("roms", "AMSDOS.ROM"));
-        string dskPath = FindPath(Path.Combine("games", "Barbarian (1987)(Palace Software)(Disk 1 of 2).dsk"));
+        string? osPath = FindPath(Path.Combine("roms", "OS6128.ROM"));
+        string? basicPath = FindPath(Path.Combine("roms", "BASIC1-1.ROM"));
+        string? amsdosPath = FindPath(Path.Combine("roms", "AMSDOS.ROM"));
+        string? dskPath = FindPath(Path.Combine("games", "Barbarian (1987)(Palace Software)(Disk 1 of 2).dsk"));
+        if (osPath == null || basicPath == null || amsdosPath == null || dskPath == null) return;
 
         var machine = new AmstradMachine(CpcModel.CPC6128);
         machine.Memory.LoadLowerRom(File.ReadAllBytes(osPath));

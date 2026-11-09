@@ -40,18 +40,13 @@ static class Program
 
     private static string FindRomPath(string filename)
     {
-        string[] candidates = new[]
+        string? dir = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(dir))
         {
-            Path.Combine("roms", filename),
-            Path.Combine("..", "..", "..", "..", "..", "roms", filename),
-            Path.Combine(AppContext.BaseDirectory, "roms", filename),
-            Path.Combine(@"D:\Emulation\Amstrad\roms", filename)
-        };
-
-        foreach (var path in candidates)
-        {
-            if (File.Exists(path)) return path;
+            string candidate = Path.Combine(dir, "roms", filename);
+            if (File.Exists(candidate)) return candidate;
+            dir = Directory.GetParent(dir)?.FullName;
         }
-        return Path.Combine(@"D:\Emulation\Amstrad\roms", filename);
+        return Path.Combine("roms", filename);
     }
 }
